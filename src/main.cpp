@@ -24,12 +24,12 @@
 // Device Config
 #define WORK_PACKAGE "1178"
 #define GW_TYPE "00"
-#define FIRMWARE_UPDATE_DATE "241121" // Format: yymmdd
-#define DEVICE_SERIAL "0002"
+#define FIRMWARE_UPDATE_DATE "250220" // Format: yymmdd
+#define DEVICE_SERIAL "0003"
 #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 
 #define HB_INTERVAL 30*1000
-#define DATA_INTERVAL 1*60*1000
+#define DATA_INTERVAL 1*10*1000
 
 // SXT sensor control
 #define SXT_ATTEMPT_EACH 5          
@@ -43,6 +43,9 @@
 #define MAX_WIFI_ATTEMPTS 2
 #define MQTT_ATTEMPT_COUNT 10
 #define MQTT_ATTEMPT_DELAY 5000
+
+// Address for GY-302
+#define ADDR_GY302 0x23
 
 // WiFi and MQTT attempt counters
 int wifiAttemptCount = WIFI_ATTEMPT_COUNT;
@@ -212,6 +215,31 @@ void check_sxt_sensor() {
   }
 }
 
+// Initialize BH1750 sensor in continuous mode
+void initBH1750(uint8_t address) {
+  Wire.beginTransmission(address);
+  Wire.write(0x01); // Power on
+  Wire.endTransmission();
+
+  Wire.beginTransmission(address);
+  Wire.write(0x10); // Continuous H-Resolution Mode (1 lx resolution, 120ms)
+  Wire.endTransmission();
+}
+
+// Read lux value from the sensor
+float readGY302(uint8_t address) {
+  int16_t val = -1;  // Default to -1 (error)
+
+  delay(180); // Wait for measurement to complete
+
+  if (Wire.requestFrom(address, (uint8_t)2) == 2) {  // Ensure 2 bytes are received
+    val = Wire.read();
+    val <<= 8;
+    val |= Wire.read();
+  }
+
+  return (val == -1) ? -1.00 : val / 1.2; // Convert to lux or return error
+}
 
 // End Function Section //
 //----------------------//
@@ -286,6 +314,7 @@ void wifiResetTask(void *param) {
 /*                                  main                             */
 /*********************************************************************/
 
+/*
 void mainTask(void *param) {
   for (;;) {
 
@@ -344,6 +373,18 @@ void mainTask(void *param) {
 
       payload += String(ppm, 2); // Append ammonia data
 
+      float luxGY302 = readGY302(ADDR_GY302);
+      Serial.print("GY-302 Lux (0x23): ");
+      Serial.print(luxGY302);
+      Serial.println(" lx");
+
+      if(luxGY302 == -1.00){
+        payload += "N/A";
+      }
+      else{
+        payload += String(luxGY302, 2);
+      }
+
       client.publish(mqtt_topic, payload.c_str());
       DEBUG_PRINTLN("Data sent -> ");
       DEBUG_PRINTLN(payload);
@@ -361,7 +402,85 @@ void mainTask(void *param) {
     // Additional task (optional, e.g., print debug message every second)
     // DEBUG_PRINTLN(timestamp);
     // DEBUG_PRINTLN("Hello");
+
     vTaskDelay(pdMS_TO_TICKS(1000));  // Print "Hello" every second
+  }
+}
+*/
+
+void mainTask(void *param) {
+  for (;;) {
+    // Get the current time's epoch
+    static unsigned long last_hb_send_time = 0;
+    if (millis() - last_hb_send_time >= HB_INTERVAL) {
+      last_hb_send_time = millis();
+
+      if (client.connected()) {
+        char hb_data[50];
+        snprintf(hb_data, sizeof(hb_data), "%s,wifi_connected", DEVICE_ID);
+        client.publish(mqtt_topic, hb_data);
+        DEBUG_PRINTLN("Heartbeat published to MQTT");
+
+        digitalWrite(LED_PIN, HIGH);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        digitalWrite(LED_PIN, LOW);
+      } else {
+        DEBUG_PRINTLN("Failed to publish Heartbeat on MQTT");
+      }
+    }
+
+    // Send sensor data
+    static unsigned long last_data_send_time = 0;
+    if (millis() - last_data_send_time >= DATA_INTERVAL) {
+      last_data_send_time = millis();
+
+      // Read ammonia sensor
+      int sensorValue = analogRead(SENSOR_PIN);
+      float sensorVoltage = sensorValue * (3.3 / 4095.0); // ESP32 12-bit ADC
+      float Rs = (3.3 - sensorVoltage) * RL / sensorVoltage;
+      float ratio = Rs / RL;
+      float ppm = pow(10, ((log10(ratio) - 0.0) / -0.6)); // Adjust based on sensor curve
+
+      // Read temperature & humidity sensor (SXT)
+      float temperature = -1, humidity = -1;
+      if (sht3x.measure()) {
+        temperature = sht3x.temperature();
+        humidity = sht3x.humidity();
+        sxt_available = true;
+      } else {
+        DEBUG_PRINTLN("SXT read error");
+        sxt_available = false;
+      }
+
+      // Read light sensor (GY-302)
+      float luxGY302 = readGY302(ADDR_GY302);
+
+      // Format MQTT payload efficiently
+      char payload[100]; // Adjust buffer size based on expected max length
+      snprintf(payload, sizeof(payload), "%s,%s,%s,%s,%s",
+              DEVICE_ID,
+              (temperature >= 0) ? String(temperature, 2).c_str() : "N/A",
+              (humidity >= 0) ? String(humidity, 2).c_str() : "N/A",
+              (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
+              (luxGY302 >= 0) ? String(luxGY302, 2).c_str() : "N/A");
+
+      client.publish(mqtt_topic, payload);
+      DEBUG_PRINTLN("Data sent -> ");
+      DEBUG_PRINTLN(payload);
+
+      digitalWrite(LED_PIN, HIGH);
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      digitalWrite(LED_PIN, LOW);
+    }
+
+    // Retry checking SXT sensor at intervals
+    static unsigned long last_sxt_check_time = 0;
+    if (!sxt_available && millis() - last_sxt_check_time >= SXT_RECHECK_INTERVAL) {
+      last_sxt_check_time = millis();
+      check_sxt_sensor();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Task delay to prevent CPU overload
   }
 }
 
@@ -390,6 +509,8 @@ void setup() {
   pinMode(SENSOR_PIN, INPUT);
   Wire.begin();
   check_sxt_sensor();
+
+  initBH1750(ADDR_GY302);
 
   // Set up MQTT client
   client.setServer(mqtt_server, 1883);
