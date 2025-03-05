@@ -17,6 +17,8 @@
 //Configuration Section Start
 //-------------------------//
 
+#define MP702 true
+
 // Debug mode Config
 #define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
@@ -25,11 +27,11 @@
 // Device Config
 #define WORK_PACKAGE "1178"
 #define GW_TYPE "00"
-#define FIRMWARE_UPDATE_DATE "250305" // Format: yymmdd
-#define DEVICE_SERIAL "0001"
+#define FIRMWARE_UPDATE_DATE "250304" // Format: yymmdd
+#define DEVICE_SERIAL "0002"
 #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 
-#define HB_INTERVAL 1*60*1000
+#define HB_INTERVAL 5*60*1000
 #define DATA_INTERVAL 1*60*1000
 
 // SXT sensor control
@@ -37,7 +39,7 @@
 #define SXT_RECHECK_INTERVAL 30000
 
 // WiFi and MQTT reconnection time config
-#define WIFI_ATTEMPT_COUNT 30
+#define WIFI_ATTEMPT_COUNT 60
 #define WIFI_ATTEMPT_DELAY 1000
 #define WIFI_WAIT_COUNT 60
 #define WIFI_WAIT_DELAY 1000
@@ -58,9 +60,10 @@ int mqttAttemptCount = MQTT_ATTEMPT_COUNT;
 const char* mqtt_server = "broker2.dma-bd.com";
 const char* mqtt_user = "broker2";
 const char* mqtt_password = "Secret!@#$1234";
+const char* mqtt_hb_topic = "DMA/MC/HB";
 const char* mqtt_topic = "DMA/MC/PUB";
 const char* mqtt_sub_topic = "DMA/MC/SUB";
-const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/DMA_MoreChick_Reza/main/ota/firmware.bin";
+const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/DMA_MoreChick_Reza/with-OTA/ota/firmware.bin";
 
 void performOTA();
 
@@ -94,14 +97,16 @@ ArtronShop_SHT3x sht3x(0x44, &Wire); // ADDR: 0 => 0x44, ADDR: 1 => 0x45
 
 // WiFi Reset Button
 #define WIFI_RESET_BUTTON_PIN 0
+#if MP702
 #define SENSOR_PIN 34 // Pin for ammonia sensor
+#define RL 10.0       // Load resistance in kOhm
+#endif
 #define LED_PIN 25 //Status LED Pin
 
 //WiFi Reset Flag
 bool wifiResetFlag = false;
 bool sxt_available = false;
 int sxt_attempt_count = 0;
-#define RL 10.0       // Load resistance in kOhm
 unsigned long last_sxt_check_time = 0;
 
 //Heartbeat and Data send interval variable
@@ -162,7 +167,7 @@ void reconnectMQTT() {
         digitalWrite(LED_PIN, LOW);
 
         char topic[48];
-        snprintf(topic, sizeof(topic), "%s/%s", mqtt_topic, DEVICE_ID);
+        snprintf(topic, sizeof(topic), "%s/%s", mqtt_sub_topic, DEVICE_ID);
         client.subscribe(topic);
         
       } else {
@@ -191,7 +196,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // Check if the message is "get_from_sd_card"
   if (message == "update_firmware") {
     DEBUG_PRINTLN("Trigger performOTA()...");
-  //  performOTA();
+   performOTA();
   }
 
 }
@@ -360,7 +365,7 @@ void mainTask(void *param) {
       if (client.connected()) {
         char hb_data[50];
         snprintf(hb_data, sizeof(hb_data), "%s,wifi_connected", DEVICE_ID);
-        client.publish(mqtt_topic, hb_data);
+        client.publish(mqtt_hb_topic, hb_data);
         DEBUG_PRINTLN("Heartbeat published to MQTT");
 
         digitalWrite(LED_PIN, HIGH);
@@ -377,11 +382,14 @@ void mainTask(void *param) {
       last_data_send_time = millis();
 
       // Read ammonia sensor
+      float ppm = -1;
+      #if MP702
       int sensorValue = analogRead(SENSOR_PIN);
       float sensorVoltage = sensorValue * (3.3 / 4095.0); // ESP32 12-bit ADC
       float Rs = (3.3 - sensorVoltage) * RL / sensorVoltage;
       float ratio = Rs / RL;
-      float ppm = pow(10, ((log10(ratio) - 0.0) / -0.6)); // Adjust based on sensor curve
+      ppm = pow(10, ((log10(ratio) - 0.0) / -0.6)); // Adjust based on sensor curve
+      #endif
 
       // Read temperature & humidity sensor (SXT)
       float temperature = -1, humidity = -1;
