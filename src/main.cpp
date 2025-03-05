@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>  // WiFiManager library
 #include <PubSubClient.h>
+#include <HTTPClient.h>
 #include <Wire.h>
 #include <ArtronShop_SHT3x.h>
 
@@ -24,12 +25,12 @@
 // Device Config
 #define WORK_PACKAGE "1178"
 #define GW_TYPE "00"
-#define FIRMWARE_UPDATE_DATE "250220" // Format: yymmdd
-#define DEVICE_SERIAL "0003"
+#define FIRMWARE_UPDATE_DATE "250305" // Format: yymmdd
+#define DEVICE_SERIAL "0001"
 #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 
-#define HB_INTERVAL 30*1000
-#define DATA_INTERVAL 1*10*1000
+#define HB_INTERVAL 1*60*1000
+#define DATA_INTERVAL 1*60*1000
 
 // SXT sensor control
 #define SXT_ATTEMPT_EACH 5          
@@ -58,6 +59,10 @@ const char* mqtt_server = "broker2.dma-bd.com";
 const char* mqtt_user = "broker2";
 const char* mqtt_password = "Secret!@#$1234";
 const char* mqtt_topic = "DMA/MC/PUB";
+const char* mqtt_sub_topic = "DMA/MC/SUB";
+const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/DMA_MoreChick_Reza/main/ota/firmware.bin";
+
+void performOTA();
 
 
 //End Configuration Section//
@@ -88,7 +93,7 @@ ArtronShop_SHT3x sht3x(0x44, &Wire); // ADDR: 0 => 0x44, ADDR: 1 => 0x45
 //----------------------------------//
 
 // WiFi Reset Button
-#define WIFI_RESET_BUTTON_PIN 35
+#define WIFI_RESET_BUTTON_PIN 0
 #define SENSOR_PIN 34 // Pin for ammonia sensor
 #define LED_PIN 25 //Status LED Pin
 
@@ -178,21 +183,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
-
+  
   // Print the topic and message for debugging
   DEBUG_PRINTLN("Message arrived on topic: " + String(topic));
   DEBUG_PRINTLN("Message content: " + message);
 
   // Check if the message is "get_from_sd_card"
-  if (message == "get_data_from_sd_card") {
-    DEBUG_PRINTLN("Triggering sendToFtp()...");
-   
+  if (message == "update_firmware") {
+    DEBUG_PRINTLN("Trigger performOTA()...");
+  //  performOTA();
   }
 
-  // Check if the message is "get_from_sd_card"
-  if (message == "clear_sd_card") {
-    DEBUG_PRINTLN("Triggering sendToFtp()...");
-  }
 }
 
 // Check SXT sensor availability
@@ -241,6 +242,41 @@ float readGY302(uint8_t address) {
   return (val == -1) ? -1.00 : val / 1.2; // Convert to lux or return error
 }
 
+// Perform OTA
+void performOTA() {
+  Serial.println("Starting OTA update...");
+
+  HTTPClient http;
+  http.begin(ota_url);
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    int contentLength = http.getSize();
+    Serial.printf("Content-Length: %d bytes\n", contentLength);
+    if (Update.begin(contentLength)) {
+      Update.writeStream(http.getStream());
+      if (Update.end() && Update.isFinished()) {
+        Serial.println("OTA update completed. Restarting...");
+        client.loop(); // Ensure MQTT client processes the publish
+        client.publish(mqtt_topic, "OTA update successful");
+        vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay to allow message to send
+        ESP.restart();
+      } else {
+        Serial.println("OTA update failed!");
+        client.publish(mqtt_topic, "OTA update failed, restarting with last firmware");
+      }
+    } else {
+      Serial.println("OTA begin failed!");
+      client.publish(mqtt_topic, "OTA begin failed, restarting with last firmware");
+    }
+  } else {
+    Serial.printf("HTTP request failed, error: %s\n", http.errorToString(httpCode).c_str());
+    client.publish(mqtt_topic, "OTA HTTP request failed, restarting with last firmware");
+  }
+  http.end();
+
+  vTaskDelay(1000 / portTICK_PERIOD_MS); // Give time for MQTT message to send
+  ESP.restart();
+}
 // End Function Section //
 //----------------------//
 
@@ -313,100 +349,6 @@ void wifiResetTask(void *param) {
 /*********************************************************************/
 /*                                  main                             */
 /*********************************************************************/
-
-/*
-void mainTask(void *param) {
-  for (;;) {
-
-    // Get the current time's epoch
-    static unsigned long last_hb_send_time = 0;
-    if (millis() - last_hb_send_time >= HB_INTERVAL) {
-      last_hb_send_time = millis();
-
-        if (client.connected()) {
-            char hb_data[50];  // Buffer for the heartbeat data
-
-            // Format the heartbeat message into the buffer
-            snprintf(hb_data, sizeof(hb_data), "%s,wifi_connected", DEVICE_ID);
-
-            // Publish the heartbeat message
-            client.publish(mqtt_topic, hb_data);
-            DEBUG_PRINTLN("Heartbeat published data to mqtt");
-            digitalWrite(LED_PIN, HIGH);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            digitalWrite(LED_PIN, LOW);
-        } else {
-            DEBUG_PRINTLN("Failed to publish Heartbeat on MQTT");
-        }
-    }
-
-    static unsigned long last_data_send_time = 0;
-    if (millis() - last_data_send_time >= DATA_INTERVAL) {
-      last_data_send_time = millis();
-      // Read ammonia sensor
-      int sensorValue = analogRead(SENSOR_PIN);
-      float sensorVoltage = sensorValue * (3.3 / 4095.0); // ESP32 12-bit ADC
-      float Rs = (3.3 - sensorVoltage) * RL / sensorVoltage;
-      float ratio = Rs / RL;
-      float ppm = pow(10, ((log10(ratio) - 0.0) / -0.6)); // Adjust based on sensor sensitivity curve
-
-      String payload = String(DEVICE_ID) + ","; // Initialize payload with GWID
-
-      // Check if SXT is available
-      if (sxt_available) {
-        if (sht3x.measure()) {
-          // If measurement is successful, set sxt_available to true
-          sxt_available = true;
-          float temperature = sht3x.temperature();
-          float humidity = sht3x.humidity();
-          payload += String(temperature, 2) + "," + String(humidity, 2) + ",";
-        } else {
-          // If there's an error in measurement, mark it as unavailable and add placeholder data
-          DEBUG_PRINTLN("SXT read error");
-          sxt_available = false; // Set to false if measurement fails
-          payload += "N/A,N/A,";
-        }
-      } else {
-        // If SXT is not available, add placeholder values
-        payload += "N/A,N/A,";
-      }
-
-      payload += String(ppm, 2); // Append ammonia data
-
-      float luxGY302 = readGY302(ADDR_GY302);
-      Serial.print("GY-302 Lux (0x23): ");
-      Serial.print(luxGY302);
-      Serial.println(" lx");
-
-      if(luxGY302 == -1.00){
-        payload += "N/A";
-      }
-      else{
-        payload += String(luxGY302, 2);
-      }
-
-      client.publish(mqtt_topic, payload.c_str());
-      DEBUG_PRINTLN("Data sent -> ");
-      DEBUG_PRINTLN(payload);
-      digitalWrite(LED_PIN, HIGH);
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      digitalWrite(LED_PIN, LOW);
-    }
-
-    // Check for SXT sensor every SXT_RECHECK_INTERVAL
-    if (!sxt_available && millis() - last_sxt_check_time >= SXT_RECHECK_INTERVAL) {
-      last_sxt_check_time = millis();
-      check_sxt_sensor(); // Retry connecting SXT sensor
-    }
-
-    // Additional task (optional, e.g., print debug message every second)
-    // DEBUG_PRINTLN(timestamp);
-    // DEBUG_PRINTLN("Hello");
-
-    vTaskDelay(pdMS_TO_TICKS(1000));  // Print "Hello" every second
-  }
-}
-*/
 
 void mainTask(void *param) {
   for (;;) {
@@ -489,7 +431,11 @@ void setup() {
   // Serial Monitor buad rate
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
-  delay(2000);
+  delay(500);
+  digitalWrite(LED_PIN, LOW);
+  delay(500);
+  digitalWrite(LED_PIN, HIGH);
+  delay(500);
   digitalWrite(LED_PIN, LOW);
 
   Serial.begin(115200);
