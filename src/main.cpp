@@ -18,8 +18,6 @@
 //Configuration Section Start
 //-------------------------//
 
-#define MP702 true
-
 // Debug mode Config
 #define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
@@ -29,16 +27,25 @@
 #define CHANGE_DEVICE_ID false
 
 #if CHANGE_DEVICE_ID
-#define WORK_PACKAGE "1178"
+  #define WORK_PACKAGE "1178"
+  
+  #define MP702 true
+
   #if MP702
-  #define GW_TYPE "00" //For Farmaciticals
-  #elif
-  #define GW_TYPE "01" //For Farmaciticals
+  // For Chicken Firm
+    #define GW_TYPE "00" 
+  #else
+  // For Pharmaceuticals
+    #define GW_TYPE "01"
   #endif
-#define FIRMWARE_UPDATE_DATE "250304" // Format: yymmdd
-#define DEVICE_SERIAL "0002"
-#define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+
+  #define FIRMWARE_UPDATE_DATE "250304" // Format: yymmdd
+  #define DEVICE_SERIAL "0002"
+
+  // Correct way to define DEVICE_ID using string concatenation
+  // #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
 #endif
+
 
 const char* DEVICE_ID;
 
