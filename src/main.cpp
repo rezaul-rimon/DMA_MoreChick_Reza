@@ -7,6 +7,7 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <ArtronShop_SHT3x.h>
+#include <Preferences.h>
 
 // #include <FastLED.h>
 
@@ -25,11 +26,23 @@
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
 // Device Config
+#define CHANGE_DEVICE_ID false
+
+#if CHANGE_DEVICE_ID
 #define WORK_PACKAGE "1178"
-#define GW_TYPE "00"
+  #if MP702
+  #define GW_TYPE "00" //For Farmaciticals
+  #elif
+  #define GW_TYPE "01" //For Farmaciticals
+  #endif
 #define FIRMWARE_UPDATE_DATE "250304" // Format: yymmdd
 #define DEVICE_SERIAL "0002"
 #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
+#endif
+
+const char* DEVICE_ID;
+
+Preferences preferences;
 
 #define HB_INTERVAL 5*60*1000
 #define DATA_INTERVAL 1*60*1000
@@ -47,7 +60,7 @@
 #define MQTT_ATTEMPT_COUNT 10
 #define MQTT_ATTEMPT_DELAY 5000
 
-// Address for GY-302
+// Address for GY-302 Light Sensor
 #define ADDR_GY302 0x23
 
 // WiFi and MQTT attempt counters
@@ -448,6 +461,26 @@ void setup() {
 
   Serial.begin(115200);
 
+  preferences.begin("device_data", false);  // Open Preferences (NVS)
+  static String device_id; // Static variable to persist scope
+  
+  #if CHANGE_DEVICE_ID
+    // Construct new device ID
+    device_id = String(WORK_PACKAGE) + GW_TYPE + FIRMWARE_UPDATE_DATE + DEVICE_SERIAL;
+    
+    // Save device ID to Preferences
+    preferences.putString("device_id", device_id);
+    Serial.println("Device ID updated in Preferences: " + device_id);
+  #else
+    // Restore device ID from Preferences
+    device_id = preferences.getString("device_id", "UNKNOWN");
+    Serial.println("Restored Device ID from Preferences: " + device_id);
+  #endif
+
+  DEVICE_ID = device_id.c_str(); // Assign to global pointer
+
+  preferences.end();
+
   Serial.print("Device ID: ");
   Serial.println(DEVICE_ID);
   delay(1000);
@@ -459,8 +492,9 @@ void setup() {
 
   // Button setup
   pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
-
+  #if MP702
   pinMode(SENSOR_PIN, INPUT);
+  #endif
   Wire.begin();
   check_sxt_sensor();
 
