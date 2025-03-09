@@ -23,24 +23,24 @@
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 
+
+#define MP702 1 // Define as 1 (true) if Ammonia sensor exists, 0 (false) otherwise.
+
+#if MP702
+  // For Chicken Farm
+  #define GW_TYPE "00"
+#else
+  // For Pharmaceuticals
+  #define GW_TYPE "01"
+#endif
+
 // Device Config
-#define CHANGE_DEVICE_ID false
+#define CHANGE_DEVICE_ID 0 // Define as 1 (true) if new firmware, 0 (false) otherwise.
 
 #if CHANGE_DEVICE_ID
   #define WORK_PACKAGE "1178"
-  
-  #define MP702 true
-
-  #if MP702
-  // For Chicken Firm
-    #define GW_TYPE "00" 
-  #else
-  // For Pharmaceuticals
-    #define GW_TYPE "01"
-  #endif
-
   #define FIRMWARE_UPDATE_DATE "250304" // Format: yymmdd
-  #define DEVICE_SERIAL "0002"
+  #define DEVICE_SERIAL "0003"
 
   // Correct way to define DEVICE_ID using string concatenation
   // #define DEVICE_ID WORK_PACKAGE GW_TYPE FIRMWARE_UPDATE_DATE DEVICE_SERIAL
