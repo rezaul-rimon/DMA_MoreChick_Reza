@@ -13,9 +13,214 @@ void otaTask(void *parameter);
 // Start Function Section //
 //-----------------------//
 
+void writeRegister(uint8_t reg) {
+  Wire.beginTransmission(HDC1080_ADDR);
+  Wire.write(reg);
+  Wire.endTransmission();
+}
+
+float readTemperature() {
+  writeRegister(0x00);  // Temperature register
+  delay(20);            // Wait for conversion (~15ms)
+  
+  Wire.requestFrom(HDC1080_ADDR, 2);
+  uint16_t raw = (Wire.read() << 8) | Wire.read();
+
+  // Convert raw data to Celsius (from datasheet)
+  return (raw / 65536.0) * 165.0 - 40.0;
+}
+
+float readHumidity() {
+  writeRegister(0x01);  // Humidity register
+  delay(20);            // Wait for conversion (~15ms)
+  
+  Wire.requestFrom(HDC1080_ADDR, 2);
+  uint16_t raw = (Wire.read() << 8) | Wire.read();
+
+  // Convert raw data to %RH (from datasheet)
+  return (raw / 65536.0) * 100.0;
+}
+
+float readAmmonia(){
+  int adcSum = 0;
+  for(int i=0; i<10; i++){
+    adcSum += analogRead(AmmoniaSensorPin);
+    delay(100);
+  }
+  int adcValue = adcSum / 10;
+  // Serial.print("Ammonia Sensor ADC Value: ");
+  // Serial.println(adcValue);
+
+  float voltageL = adcValue * (3.3 / 4095.0); // ESP32 12-bit ADC  
+  // Serial.print("RL Voltage: ");
+  // Serial.print(voltageL, 3);
+  // Serial.println(" V");
+
+  float voltageS = 3.3 - voltageL;
+  // Serial.print("Rs Voltage: ");
+  // Serial.print(voltageS, 3);
+  // Serial.println(" V");
+
+  float Rs = (voltageS * 10000.0) / voltageL; // RL = 10k Ohm
+  // Serial.print("Calculated Rs: ");
+  // Serial.print(Rs, 2);
+  // Serial.println(" Ohm");
+
+  float ratio = Rs / 10000.0; // RL = 10k Ohm
+  float ppm = pow(10, ((log10(ratio) + 0.60) / -0.45)); // Adjust based on sensor curve
+  // Serial.print("Calculated Ammonia Concentration: ");
+  // Serial.print(ppm, 2);
+  // Serial.println(" ppm");
+  return ppm;
+}
+
+float ldrToLux(int adc) {
+  // Known calibration points
+  const int ADC_vals[5] = {4048, 3800, 2096, 1966, 1600};
+  const float Lux_vals[5] = {961, 488, 16.67, 11.67, 10.83};
+  
+  // If out of range
+  if(adc >= ADC_vals[0]) return Lux_vals[0];
+  if(adc <= ADC_vals[4]) return Lux_vals[4];
+  
+  // Find which segment
+  for(int i=0; i<4; i++){
+    if(adc <= ADC_vals[i] && adc >= ADC_vals[i+1]){
+    float log_adc1 = log(ADC_vals[i]);
+    float log_adc2 = log(ADC_vals[i+1]);
+    float log_lux1 = log(Lux_vals[i]);
+    float log_lux2 = log(Lux_vals[i+1]);
+    
+    float log_adc = log(adc);
+    float log_lux = log_lux1 + (log_lux2 - log_lux1) * (log_adc - log_adc1) / (log_adc2 - log_adc1);
+    
+    return exp(log_lux);  // return interpolated Lux
+    }
+  }
+  return 0; // fallback
+}
+
+float readLightIntensity(){
+  // Serial.print("LDR Value: ");
+  int ldrValueSum = 0;
+  for(int i=0; i<10; i++){
+    ldrValueSum += analogRead(LDR_PIN);
+    delay(100);
+  }
+  int ldrValue = ldrValueSum / 10;
+  // Serial.print(ldrValue);
+  // Serial.println();
+
+  float lux = ldrToLux(ldrValue);
+  // Serial.print("Calculated Lux: ");
+  // Serial.print(lux, 2);
+  // Serial.println(" lx");
+  return lux;
+}
+
+void publishHeartbeat() {
+  if (client.connected()) {
+    char hb_data[50];
+    snprintf(hb_data, sizeof(hb_data), "%s,wifi_connected", DEVICE_ID);
+    client.publish(mqtt_hb_topic, hb_data);
+    DEBUG_PRINTLN("Heartbeat published to MQTT");
+
+    #ifdef USE_Fast_LED
+      leds[0] = CRGB::Blue;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Blue;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+    #endif
+  } else {
+    DEBUG_PRINTLN("Failed to publish Heartbeat on MQTT");
+  }
+}
+
+void publishData() {
+  float temperature = readTemperature();
+  float humidity = readHumidity();
+  float ammonia = readAmmonia();
+  float lightIntensity = readLightIntensity();
+
+  // Format MQTT payload efficiently
+  char payload[100]; // Adjust buffer size based on expected max length
+  snprintf(payload, sizeof(payload), "%s,%s,%s,%s,%s",
+          DEVICE_ID,
+          (temperature >= 0) ? String(temperature, 2).c_str() : "N/A",
+          (humidity >= 0) ? String(humidity, 2).c_str() : "N/A",
+          (ammonia >= 0) ? String(ammonia, 2).c_str() : "N/A",
+          (lightIntensity >= 0) ? String(lightIntensity, 2).c_str() : "N/A");
+
+  if(client.connected()){
+    DEBUG_PRINTLN("MQTT connected, sending data...");
+    client.publish(mqtt_pub_topic, payload);
+    DEBUG_PRINTLN("Data sent -> ");
+    DEBUG_PRINTLN(payload);
+    #ifdef USE_Fast_LED
+      leds[0] = CRGB::Green;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Green;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+    #endif
+  } else {
+    DEBUG_PRINTLN("MQTT not connected, cannot send data.");
+    DEBUG_PRINTLN("Payload was: ");
+    DEBUG_PRINTLN(payload);
+    #ifdef USE_Fast_LED
+      leds[0] = CRGB::DeepPink;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+    #endif
+    // continue; // Skip sending if not connected
+
+  }
+}
+
+void publishPingResponse() {
+  if (client.connected()) {
+    char ping_data[50];
+    snprintf(ping_data, sizeof(ping_data), "%s,%s,%s", DEVICE_ID,FIRMWARE_VERSION,FIRMWARE_RELEASE_DATE);
+    client.publish(mqtt_ack_topic, ping_data);
+    DEBUG_PRINTLN("Heartbeat published to MQTT");
+
+    #ifdef USE_Fast_LED
+      leds[0] = CRGB::Blue;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Green;
+      FastLED.show();
+      vTaskDelay(pdMS_TO_TICKS(250));
+      leds[0] = CRGB::Black;
+      FastLED.show();
+    #endif
+  } else {
+    DEBUG_PRINTLN("Failed to publish Heartbeat on MQTT");
+  }
+}
+//-----------------------//
+
+
 // Function to reconnect to WiFi
 void reconnectWiFi() {
-  // digitalWrite(LED_PIN, HIGH);
   #ifdef USE_Fast_LED
     leds[0] = CRGB::Red;
     FastLED.show();
@@ -54,7 +259,7 @@ void reconnectWiFi() {
 void reconnectMQTT() {
   if (!client.connected()) {
     esp_task_wdt_reset();
-    // digitalWrite(LED_PIN, HIGH);
+
     #ifdef USE_Fast_LED
       leds[0] = CRGB::Yellow;
       FastLED.show();
@@ -69,7 +274,7 @@ void reconnectMQTT() {
         DEBUG_PRINTLN("MQTT connected");
         DEBUG_PRINT("Client_ID: ");
         DEBUG_PRINTLN(clientId);
-        // digitalWrite(LED_PIN, LOW);
+        
         #ifdef USE_Fast_LED
           leds[0] = CRGB::Black;
           FastLED.show();
@@ -103,14 +308,37 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   #ifdef USE_Fast_LED
     leds[0] = CRGB::Blue;
     FastLED.show();
-    vTaskDelay(pdMS_TO_TICKS(500)); // Short delay to indicate message received
+    vTaskDelay(pdMS_TO_TICKS(300)); // Short delay to indicate message received
     leds[0] = CRGB::Black;
     FastLED.show();
+    vTaskDelay(pdMS_TO_TICKS(200));
   #endif
   
   // Print the topic and message for debugging
   DEBUG_PRINTLN("Message arrived on topic: " + String(topic));
   DEBUG_PRINTLN("Message content: " + message);
+
+  // Handle ping request
+  if (message == "ping") {
+    publishPingResponse();
+    return;
+  }
+
+  if( message == "restart") {
+    DEBUG_PRINTLN("Received reset command via MQTT, restarting...");
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    ESP.restart();
+  }
+
+  if(message == "heartbeat") {
+    publishHeartbeat();
+    return;
+  }
+
+  if(message == "data") {
+    publishData();
+    return;
+  }
 
   // Check if the message is "update_firmware"
   if (message == "update_firmware") {
@@ -277,28 +505,10 @@ void mainTask(void *param) {
       last_hb_send_time = millis();
       //----------------------------------
 
-      if (client.connected()) {
-        char hb_data[50];
-        snprintf(hb_data, sizeof(hb_data), "%s,wifi_connected", DEVICE_ID);
-        client.publish(mqtt_hb_topic, hb_data);
-        DEBUG_PRINTLN("Heartbeat published to MQTT");
+      // Publish heartbeat
+      publishHeartbeat();
 
-        #ifdef USE_Fast_LED
-          leds[0] = CRGB::Blue;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Black;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Blue;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Black;
-          FastLED.show();
-        #endif
-      } else {
-        DEBUG_PRINTLN("Failed to publish Heartbeat on MQTT");
-      }
+      //----------------------------------
     }
 
     // Send sensor data
@@ -306,57 +516,11 @@ void mainTask(void *param) {
     if ((millis() - last_data_send_time >= DATA_INTERVAL) || (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW)) {
       last_data_send_time = millis();
       //----------------------------------
-      float temperature = -1;
-      float humidity = -1;
-      float ppm = -1;
-      float luxGY302 = -1;
 
-      // Format MQTT payload efficiently
-      char payload[100]; // Adjust buffer size based on expected max length
-      snprintf(payload, sizeof(payload), "%s,%s,%s,%s,%s",
-              DEVICE_ID,
-              (temperature >= 0) ? String(temperature, 2).c_str() : "N/A",
-              (humidity >= 0) ? String(humidity, 2).c_str() : "N/A",
-              (ppm >= 0) ? String(ppm, 2).c_str() : "N/A",
-              (luxGY302 >= 0) ? String(luxGY302, 2).c_str() : "N/A");
-
-      if(client.connected()){
-        DEBUG_PRINTLN("MQTT connected, sending data...");
-        client.publish(mqtt_pub_topic, payload);
-        DEBUG_PRINTLN("Data sent -> ");
-        DEBUG_PRINTLN(payload);
-        #ifdef USE_Fast_LED
-          leds[0] = CRGB::Green;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Black;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Green;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Black;
-          FastLED.show();
-        #endif
-      } else {
-        DEBUG_PRINTLN("MQTT not connected, cannot send data.");
-        DEBUG_PRINTLN("Payload was: ");
-        DEBUG_PRINTLN(payload);
-        #ifdef USE_Fast_LED
-          leds[0] = CRGB::DeepPink;
-          FastLED.show();
-          vTaskDelay(pdMS_TO_TICKS(250));
-          leds[0] = CRGB::Black;
-          FastLED.show();
-        #endif
-        // continue; // Skip sending if not connected
-      }
+      // Publish sensor data
+      publishData();
       
-
-      // digitalWrite(LED_PIN, HIGH);
-      // vTaskDelay(pdMS_TO_TICKS(1000));
-      // digitalWrite(LED_PIN, LOW);
-      
+      //--------------------------------------------
     }
 
     // Check for WiFi reset button press
@@ -400,6 +564,7 @@ void setup() {
 
   Serial.begin(115200);
 
+  // Initialize Preferences
   preferences.begin("device_data", false);  // Open Preferences (NVS)
   static String device_id; // Static variable to persist scope
   
@@ -419,6 +584,7 @@ void setup() {
   DEVICE_ID = device_id.c_str(); // Assign to global pointer
 
   preferences.end();
+  // End Preferences
 
   Serial.print("Device ID: ");
   Serial.println(DEVICE_ID);
@@ -433,6 +599,18 @@ void setup() {
     leds[0] = CRGB::Black;
     FastLED.show();
   #endif
+
+  // Initialize I2C for HDC1080
+  Wire.begin(21, 22);  // SDA, SCL
+  delay(100);
+  Wire.beginTransmission(HDC1080_ADDR);
+  Wire.write(0x02);
+  Wire.write(0x10); // Bit7=0 Temp first, Bits[10:8]=000 (14-bit)
+  Wire.write(0x00);
+  Wire.endTransmission();
+  delay(15);
+  Serial.println("✅ HDC1080 Initialized!");
+  // End I2C Initialization
 
   // Button setup
   pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);

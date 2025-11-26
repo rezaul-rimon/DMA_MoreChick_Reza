@@ -18,6 +18,22 @@
 #include <FastLED.h>
 // ---------------------------- //
 
+// Device ID Config
+#define CHANGE_DEVICE_ID 0 // Define as 1 (true) if new firmware, 0 (false) otherwise.
+
+#if CHANGE_DEVICE_ID
+    #define WORK_PACKAGE "1178"
+    #define GW_TYPE "00"
+    #define FIRMWARE_UPDATE_DATE "251015" // Format: yymmdd
+    #define DEVICE_SERIAL "0999"
+#endif
+// ----------------------- //
+
+//Firmware Release Note
+#define FIRMWARE_VERSION "WiFi-2.11.0"
+#define FIRMWARE_RELEASE_DATE "2025-11-26"
+// ----------------------- //
+
 
 //Configuration Section Start
 //-------------------------//
@@ -29,21 +45,12 @@
 
 // Sensor Config
 // ----------------------- //
+#define LDR_PIN 32 // Pin for LDR sensor
+#define NTC_PIN 35 // Pin for NTC sensor
+#define AmmoniaSensorPin 34 // Pin for Ammonia sensor
 
-
-
-
-// ----------------------- //
-
-// Device ID Config
-#define CHANGE_DEVICE_ID 0 // Define as 1 (true) if new firmware, 0 (false) otherwise.
-
-#if CHANGE_DEVICE_ID
-    #define WORK_PACKAGE "1178"
-    #define GW_TYPE "00"
-    #define FIRMWARE_UPDATE_DATE "251015" // Format: yymmdd
-    #define DEVICE_SERIAL "0999"
-#endif
+// HDC1080 default I2C address
+#define HDC1080_ADDR 0x40
 
 // ----------------------- //
 
@@ -87,6 +94,8 @@ const char* mqtt_password = "Secret!@#$1234";
 const char* mqtt_hb_topic = "DMA/MC/HB";
 const char* mqtt_pub_topic = "DMA/MC/PUB";
 const char* mqtt_sub_topic = "DMA/MC/SUB";
+const char* mqtt_ack_topic = "DMA/MC/ACK";
+// ----------------------- //
 const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/DMA_MoreChick_Reza/main/ota/firmware.bin";
 // ----------------------- //
 
