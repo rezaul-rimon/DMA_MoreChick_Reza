@@ -1,11 +1,19 @@
+#define DEBUG_MODE true
+#define USE_Fast_LED
+
+
+#define CONFIG_TASK_WDT_DEBUG 1
+
+
+
 // Start Library Include section //
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
 #include <HTTPClient.h>
+#include <esp_task_wdt.h>
 #include <Wire.h>
-#include <ArtronShop_SHT3x.h>
 #include <Preferences.h>
 #include <FastLED.h>
 // ---------------------------- //
@@ -15,25 +23,16 @@
 //-------------------------//
 
 // Debug mode Config
-#define DEBUG_MODE true
 #define DEBUG_PRINT(x)  if (DEBUG_MODE) { Serial.print(x); }
 #define DEBUG_PRINTLN(x) if (DEBUG_MODE) { Serial.println(x); }
 // ----------------------- //
 
-// Device Type Config
-#define MP702 1 // Define as 1 (true) if Ammonia sensor exists, 0 (false) otherwise.
-#if MP702
-    // For Chicken Farm
-    #define GW_TYPE "00"
-#else
-    // For Pharmaceuticals
-    #define GW_TYPE "01"
-#endif
+// Sensor Config
 // ----------------------- //
-#if MP702
-  #define SENSOR_PIN 34 // Pin for ammonia sensor
-  #define RL 10.0       // Load resistance in kOhm
-#endif
+
+
+
+
 // ----------------------- //
 
 // Device ID Config
@@ -41,8 +40,9 @@
 
 #if CHANGE_DEVICE_ID
     #define WORK_PACKAGE "1178"
+    #define GW_TYPE "00"
     #define FIRMWARE_UPDATE_DATE "251015" // Format: yymmdd
-    #define DEVICE_SERIAL "0009"
+    #define DEVICE_SERIAL "0999"
 #endif
 
 // ----------------------- //
@@ -54,21 +54,13 @@
 // ----------------------- //
 
 // FastLED Config
-#define Fast_LED 1 // Define as 1 (true) if FastLED library is used, 0 (false) otherwise.
-#if Fast_LED
-    #define DATA_PIN 4
+#ifdef USE_Fast_LED
+    #define DATA_PIN 27
     #define NUM_LEDS 1
     CRGB leds[NUM_LEDS];
 #endif
 // ----------------------- //
 
-// SXT sensor check config
-#define SXT_ATTEMPT_EACH 5          
-#define SXT_RECHECK_INTERVAL 30000
-// ----------------------- //
-bool sxt_available = false;
-int sxt_attempt_count = 0;
-unsigned long last_sxt_check_time = 0;
 // ----------------------- //
 
 // WiFi and MQTT reconnection time config
@@ -101,17 +93,12 @@ const char* ota_url = "https://raw.githubusercontent.com/rezaul-rimon/DMA_MoreCh
 //Sensor and other global variables
 //----------------------- //
 
-// Address for GY-302 Light Sensor
-#define ADDR_GY302 0x23
-// ----------------------- //
 
 const char* DEVICE_ID;
 Preferences preferences;
 
 // WiFi Reset Button
 #define WIFI_RESET_BUTTON_PIN 0
-
-// #define LED_PIN 25
 
 //Enf of Configuration Section
 //-------------------------//
@@ -125,6 +112,7 @@ Preferences preferences;
 WiFiManager wm;
 WiFiClient espClient;
 PubSubClient client(espClient);
+
 //---------------------------//
 
 //FreeRTOS Task instances
@@ -133,9 +121,6 @@ TaskHandle_t mainTaskHandle;
 TaskHandle_t wifiResetTaskHandle = NULL;
 TaskHandle_t otaTaskHandle = NULL;
 //---------------------------//
-
-//SHT3x sensor instance
-ArtronShop_SHT3x sht3x(0x44, &Wire); // ADDR: 0 => 0x44, ADDR: 1 => 0x45
 
 
 //End Making instance Section//

@@ -3,9 +3,6 @@
 // Function Prototypes
 void reconnectWiFi();
 void reconnectMQTT();
-void check_sxt_sensor();
-float readGY302(uint8_t address);
-void initBH1750(uint8_t address);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void networkTask(void *param);
 void mainTask(void *param);
@@ -13,21 +10,20 @@ void wifiResetTask(void *param);
 void otaTask(void *parameter);
 //-----------------------//
 
-
-
 // Start Function Section //
 //-----------------------//
 
 // Function to reconnect to WiFi
 void reconnectWiFi() {
   // digitalWrite(LED_PIN, HIGH);
-  #if Fast_LED
+  #ifdef USE_Fast_LED
     leds[0] = CRGB::Red;
     FastLED.show();
   #endif
 
   if (WiFi.status() != WL_CONNECTED) {
     if (wifiAttemptCount > 0) {
+      esp_task_wdt_reset();
       DEBUG_PRINTLN("Attempting WiFi connection...");
       WiFi.begin();  // Use saved credentials
       wifiAttemptCount--;
@@ -35,11 +31,13 @@ void reconnectWiFi() {
       // vTaskDelay(WIFI_ATTEMPT_DELAY / portTICK_PERIOD_MS);
       vTaskDelay(pdMS_TO_TICKS(WIFI_ATTEMPT_DELAY));
     } else if (wifiWaitCount > 0) {
+      esp_task_wdt_reset();
       wifiWaitCount--;
       DEBUG_PRINTLN("WiFi wait... retrying in a moment");
       DEBUG_PRINTLN("Remaining WiFi wait time: " + String(wifiWaitCount) + " seconds");
       vTaskDelay(pdMS_TO_TICKS(WIFI_WAIT_DELAY));
     } else {
+      esp_task_wdt_reset();
       wifiAttemptCount = WIFI_ATTEMPT_COUNT;
       wifiWaitCount = WIFI_WAIT_COUNT;
       maxWifiAttempts--;
@@ -55,8 +53,9 @@ void reconnectWiFi() {
 // Function to reconnect to MQTT with a unique client ID
 void reconnectMQTT() {
   if (!client.connected()) {
+    esp_task_wdt_reset();
     // digitalWrite(LED_PIN, HIGH);
-    #if Fast_LED
+    #ifdef USE_Fast_LED
       leds[0] = CRGB::Yellow;
       FastLED.show();
     #endif
@@ -71,7 +70,7 @@ void reconnectMQTT() {
         DEBUG_PRINT("Client_ID: ");
         DEBUG_PRINTLN(clientId);
         // digitalWrite(LED_PIN, LOW);
-        #if Fast_LED
+        #ifdef USE_Fast_LED
           leds[0] = CRGB::Black;
           FastLED.show();
         #endif
@@ -100,7 +99,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
-  #if Fast_LED
+  
+  #ifdef USE_Fast_LED
     leds[0] = CRGB::Blue;
     FastLED.show();
     vTaskDelay(pdMS_TO_TICKS(500)); // Short delay to indicate message received
@@ -124,65 +124,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 //-----------------------//
 
-// Check SXT sensor availability
-void check_sxt_sensor() {
-  DEBUG_PRINTLN("Checking SXT sensor availability...");
-  sxt_attempt_count = 0;
-  
-  while (!sht3x.begin() && sxt_attempt_count < SXT_ATTEMPT_EACH) {
-    DEBUG_PRINTLN("SXT sensor not found, retrying...");
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    sxt_attempt_count++;
-  }
-
-  if (sht3x.begin()) {
-    sxt_available = true;
-    DEBUG_PRINTLN("SXT sensor connected successfully.");
-  } else {
-    sxt_available = false;
-    DEBUG_PRINTLN("SXT sensor not available, continuing without SXT data.");
-    #if Fast_LED
-      leds[0] = CRGB::Red;
-      FastLED.show();
-      vTaskDelay(pdMS_TO_TICKS(500));
-      leds[0] = CRGB::Black;
-      FastLED.show();
-    #endif
-  }
-}
-//-----------------------//
-
-// Initialize BH1750 / GY302 Light sensor in continuous mode
-void initBH1750(uint8_t address) {
-  Wire.beginTransmission(address);
-  Wire.write(0x01); // Power on
-  Wire.endTransmission();
-
-  Wire.beginTransmission(address);
-  Wire.write(0x10); // Continuous H-Resolution Mode (1 lx resolution, 120ms)
-  Wire.endTransmission();
-}
-//-----------------------//
-
-// Read lux value from the sensor
-float readGY302(uint8_t address) {
-  int16_t val = -1;  // Default to -1 (error)
-
-  delay(180); // Wait for measurement to complete
-
-  if (Wire.requestFrom(address, (uint8_t)2) == 2) {  // Ensure 2 bytes are received
-    val = Wire.read();
-    val <<= 8;
-    val |= Wire.read();
-  }
-
-  return (val == -1) ? -1.00 : val / 1.2; // Convert to lux or return error
-}
-//-----------------------//
-
-
-// End Function Section //
-//----------------------//
 
 
 // Start FreeRTOS Task Section //
@@ -190,9 +131,10 @@ float readGY302(uint8_t address) {
 
 // Start OTA Task
 void otaTask(void *parameter) {
+  esp_task_wdt_reset();
   Serial.println("Starting OTA update...");
 
-  #if Fast_LED
+  #ifdef USE_Fast_LED
     leds[0] = CRGB::Green;
     FastLED.show();
     vTaskDelay(pdMS_TO_TICKS(250)); // Short delay to indicate status
@@ -259,6 +201,7 @@ void networkTask(void *param) {
   WiFi.begin();
 
   for (;;) {
+    esp_task_wdt_reset();
     // Check WiFi connection
     if (WiFi.status() == WL_CONNECTED) {
       // Check and reconnect MQTT if necessary
@@ -282,19 +225,40 @@ void networkTask(void *param) {
 //Start WiFi reset task
 void wifiResetTask(void *param) {
   DEBUG_PRINTLN("WiFi Reset Task started, resetting WiFi settings...");
+
   for (;;) {
+    esp_task_wdt_reset();
+
     leds[0] = CRGB::Green;
     FastLED.show();
+
+    // Suspend other tasks while configuring WiFi
     vTaskSuspend(networkTaskHandle);
     vTaskSuspend(mainTaskHandle);
     vTaskDelay(pdMS_TO_TICKS(100));
 
+    // Reset WiFi settings
     wm.resetSettings();
-    wm.autoConnect("DMA_MoreChick");
-    ESP.restart();
 
-    wifiResetTaskHandle = NULL;  
-    vTaskDelete(NULL);
+    // Set timeout for config portal (e.g., 3 minutes)
+    wm.setConfigPortalTimeout(180);  // timeout in seconds
+
+    // Start autoConnect with timeout
+    if (!wm.autoConnect("DMA_MoreChick")) {
+      DEBUG_PRINTLN("WiFi config portal timed out!");
+      // Handle fallback, e.g., restart or continue offline
+      ESP.restart();
+    }
+
+    // If connected successfully
+    DEBUG_PRINTLN("WiFi connected!");
+    // If WiFi is configured successfully
+    DEBUG_PRINTLN("Restarting to apply settings...");
+    delay(2000);
+    ESP.restart();  // Restart ESP to use new WiFi credentials
+
+    wifiResetTaskHandle = NULL;
+    vTaskDelete(NULL); // Delete this task
   }
 }
 //-----------------------//
@@ -306,10 +270,12 @@ void wifiResetTask(void *param) {
 
 void mainTask(void *param) {
   for (;;) {
+    esp_task_wdt_reset();
     // Get the current time's epoch
     static unsigned long last_hb_send_time = 0;
     if (millis() - last_hb_send_time >= HB_INTERVAL) {
       last_hb_send_time = millis();
+      //----------------------------------
 
       if (client.connected()) {
         char hb_data[50];
@@ -317,10 +283,7 @@ void mainTask(void *param) {
         client.publish(mqtt_hb_topic, hb_data);
         DEBUG_PRINTLN("Heartbeat published to MQTT");
 
-        // digitalWrite(LED_PIN, HIGH);
-        // vTaskDelay(pdMS_TO_TICKS(1000));
-        // digitalWrite(LED_PIN, LOW);
-        #if Fast_LED
+        #ifdef USE_Fast_LED
           leds[0] = CRGB::Blue;
           FastLED.show();
           vTaskDelay(pdMS_TO_TICKS(250));
@@ -342,30 +305,11 @@ void mainTask(void *param) {
     static unsigned long last_data_send_time = 0;
     if ((millis() - last_data_send_time >= DATA_INTERVAL) || (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW)) {
       last_data_send_time = millis();
-
-      // Read ammonia sensor
+      //----------------------------------
+      float temperature = -1;
+      float humidity = -1;
       float ppm = -1;
-      #if MP702
-      int sensorValue = analogRead(SENSOR_PIN);
-      float sensorVoltage = sensorValue * (3.3 / 4095.0); // ESP32 12-bit ADC
-      float Rs = (3.3 - sensorVoltage) * RL / sensorVoltage;
-      float ratio = Rs / RL;
-      ppm = pow(10, ((log10(ratio) - 0.0) / -0.6)); // Adjust based on sensor curve
-      #endif
-
-      // Read temperature & humidity sensor (SXT)
-      float temperature = -1, humidity = -1;
-      if (sht3x.measure()) {
-        temperature = sht3x.temperature();
-        humidity = sht3x.humidity();
-        sxt_available = true;
-      } else {
-        DEBUG_PRINTLN("SXT read error");
-        sxt_available = false;
-      }
-
-      // Read light sensor (GY-302)
-      float luxGY302 = readGY302(ADDR_GY302);
+      float luxGY302 = -1;
 
       // Format MQTT payload efficiently
       char payload[100]; // Adjust buffer size based on expected max length
@@ -381,24 +325,24 @@ void mainTask(void *param) {
         client.publish(mqtt_pub_topic, payload);
         DEBUG_PRINTLN("Data sent -> ");
         DEBUG_PRINTLN(payload);
-        #if Fast_LED
-        leds[0] = CRGB::Green;
-        FastLED.show();
-        vTaskDelay(pdMS_TO_TICKS(250));
-        leds[0] = CRGB::Black;
-        FastLED.show();
-        vTaskDelay(pdMS_TO_TICKS(250));
-        leds[0] = CRGB::Green;
-        FastLED.show();
-        vTaskDelay(pdMS_TO_TICKS(250));
-        leds[0] = CRGB::Black;
-        FastLED.show();
-      #endif
+        #ifdef USE_Fast_LED
+          leds[0] = CRGB::Green;
+          FastLED.show();
+          vTaskDelay(pdMS_TO_TICKS(250));
+          leds[0] = CRGB::Black;
+          FastLED.show();
+          vTaskDelay(pdMS_TO_TICKS(250));
+          leds[0] = CRGB::Green;
+          FastLED.show();
+          vTaskDelay(pdMS_TO_TICKS(250));
+          leds[0] = CRGB::Black;
+          FastLED.show();
+        #endif
       } else {
         DEBUG_PRINTLN("MQTT not connected, cannot send data.");
         DEBUG_PRINTLN("Payload was: ");
         DEBUG_PRINTLN(payload);
-        #if Fast_LED
+        #ifdef USE_Fast_LED
           leds[0] = CRGB::DeepPink;
           FastLED.show();
           vTaskDelay(pdMS_TO_TICKS(250));
@@ -415,19 +359,12 @@ void mainTask(void *param) {
       
     }
 
-    // Retry checking SXT sensor at intervals
-    static unsigned long last_sxt_check_time = 0;
-    if (!sxt_available && millis() - last_sxt_check_time >= SXT_RECHECK_INTERVAL) {
-      last_sxt_check_time = millis();
-      check_sxt_sensor();
-    }
-
     // Check for WiFi reset button press
     if (digitalRead(WIFI_RESET_BUTTON_PIN) == LOW) {
       unsigned long pressStartTime = millis();
       DEBUG_PRINTLN("Button Pressed....");
 
-      #if Fast_LED
+      #ifdef USE_Fast_LED
         leds[0] = CRGB::Blue;
         FastLED.show();
       #endif
@@ -445,7 +382,7 @@ void mainTask(void *param) {
           vTaskDelay(pdMS_TO_TICKS(100));
         }
       }
-      #if Fast_LED
+      #ifdef USE_Fast_LED
         leds[0] = CRGB::Black;
         FastLED.show();
       #endif
@@ -460,15 +397,6 @@ void mainTask(void *param) {
 
 // Setup function
 void setup() {
-  // Serial Monitor buad rate
-  // pinMode(LED_PIN, OUTPUT);
-  // digitalWrite(LED_PIN, HIGH);
-  // delay(500);
-  // digitalWrite(LED_PIN, LOW);
-  // delay(500);
-  // digitalWrite(LED_PIN, HIGH);
-  // delay(500);
-  // digitalWrite(LED_PIN, LOW);
 
   Serial.begin(115200);
 
@@ -496,7 +424,7 @@ void setup() {
   Serial.println(DEVICE_ID);
   delay(1000);
 
-  #if Fast_LED
+  #ifdef USE_Fast_LED
     FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
     leds[0] = CRGB::HotPink;
     FastLED.show();
@@ -508,17 +436,16 @@ void setup() {
 
   // Button setup
   pinMode(WIFI_RESET_BUTTON_PIN, INPUT_PULLUP);
-  #if MP702
-    pinMode(SENSOR_PIN, INPUT);
-  #endif
 
-  Wire.begin();
-  check_sxt_sensor();
-  initBH1750(ADDR_GY302);
 
   // Set up MQTT client
   client.setServer(mqtt_server, 1883);
   client.setCallback(mqttCallback);
+  client.setKeepAlive(60);
+  Serial.println("✅ MQTT Client Initialized!");
+
+  esp_task_wdt_init(60, true);   // 🛡️ 60s timeout for all registered tasks 
+  Serial.println("✅ WDT Initialized!");
 
   // Create tasks
   xTaskCreatePinnedToCore(networkTask, "Network Task", 8*1024, NULL, 1, &networkTaskHandle, 0);
@@ -528,6 +455,7 @@ void setup() {
 
 // Loop function
 void loop() {
+  vTaskDelay(pdMS_TO_TICKS(100));
 }
 
 
