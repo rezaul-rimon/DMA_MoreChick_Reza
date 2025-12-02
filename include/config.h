@@ -25,9 +25,9 @@
     #define WORK_PACKAGE "1178"
     #define GW_TYPE "00"
     #define FIRMWARE_UPDATE_DATE "251015" // Format: yymmdd
-    #define DEVICE_SERIAL "0999"
+    #define DEVICE_SERIAL "0117"
 #endif
-// ----------------------- //
+// ----------------------- // 
 
 //Firmware Release Note
 #define FIRMWARE_VERSION "WiFi-2.11.0"
